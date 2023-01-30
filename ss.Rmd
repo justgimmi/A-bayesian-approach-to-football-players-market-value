@@ -1,0 +1,1310 @@
+---
+title: "Detecting influence factors of football players \n market value through a Bayesian approach"
+author: "Gian Mario Sangiovanni"
+date: "19-01-2023"
+output: 
+  beamer_presentation:
+    
+    theme : "AnnArbor"
+    colortheme : "beaver"
+    fonttheme: "structurebold"
+    slide_level: 2
+    latex_engine: xelatex
+header-includes: 
+- \usepackage{pifont}
+- \usepackage[english]{babel}
+- \usepackage{ragged2e}
+- \usepackage{amsmath}
+- \usepackage{latexsym}
+- \usepackage{amsfonts}
+- \usepackage{xcolor}
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(coefplot)
+library(Hmisc)
+library(ggmcmc)
+library(lme4)
+library(R2jags)
+library(coda)
+library(LaplacesDemon)
+library(bayestestR)
+library(TeachingDemos)
+library(ggridges)
+library(ggplot2)
+setwd("C:/Users/apalm/Desktop/JIMMY/Bayesian Modelling/Bayesian Project")
+dataset = read.csv("dataset.csv")
+dat = dataset
+dataset = dataset[, c(4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 19, 23 )]
+colnames(dataset)
+n = nrow(dataset)
+
+```
+
+## MAIN IDEAS (1)
+
+\justifying
+
+Football can be considered as the world's most popular sport and
+football clubs are no longer just "clubs" but companies. The most
+important decision that this "football companies" have to make concern
+which players to employ, since they have a huge impact on the win.
+Players can be actually traded between teams and many researchers have
+tried to understand which factors influence the value of a player. We
+have just to remark the difference between :
+
+```{=tex}
+\begin{itemize}
+\item Market Value, i.e an estimate of the player value on the market (unobservable);
+\item Transfer fee, i.e the real price paid for a player. 
+\end{itemize}
+```
+## MAIN IDEAS (2)
+
+\justifying
+
+Our aim is to understand both conceptually and practically which
+variables can have an influence on the (log) market value of a player.
+Furthermore, we would like to discover if there are external factors
+having an indirect impact on it.
+
+Before going forward with the analysis, it is important to describe the
+dataset and suggest a possible model.
+
+## DATASET (1)
+
+\justifying
+
+I take this dataset from \textit{TransferMarket} and it refers to all
+the SERIE A players in the season $2019/2020$ that have a market value
+greater than $10$ million euros. Basically, we have the profile (14
+variables) of $151$ players belonging to all the possible teams in the
+league. Moreover there aren't missing values, so we are facing a
+complete dataset.
+
+```{r response, comment=NA}
+head(dataset[, 1:8])
+
+```
+
+## DATASET (2)
+
+```{r response24, echo=FALSE, fig.height=5}
+hist(dataset$value, breaks = 15, ylim = c(0, 60), xlab = "Market-value", main = "Response distribution", xlim = c(1e+07, 8e+07));points(c(median(dataset$value), mean(dataset$value)), c(0, 0),  col = c('red', "blue"), pch = 16, cex = 1.5);legend("topright", legend = c( paste("median = ", round(median(dataset$value), 3)), paste("mean = ", 2.3e+07)), col = c("red", "blue"), pch = c(16, 16), box.col = "white");box()
+
+```
+
+
+```{r ee, echo=FALSE, comment=NA}
+as.matrix(dat[dat$value == max(dat$value), c("player", "value")])[1, ]
+
+```
+
+## DATASET (3)
+
+In order to have a more interpretable response variable, we use a
+log-transformation.
+
+```{r response 2, echo = F, fig.height=3.7}
+par(mar = c(5, 4, 3, 2), mgp = c(3, 1.3, 0.2))
+response = log(dataset$value)
+hist(response, breaks = 15, main = "Response distribution", prob = T, ylim = c(0,2), xlim = c(16, 18.5), xlab = "log-market-value", ylab = "relative frequencies");points(c(median(response), mean(response)), c(0, 0),  col = c('red', "blue"), pch = 16, cex = 1.5);legend("topright", legend = c( paste("median = ", round(median(response), 3)), paste("mean = ", round(mean(response), 3)), paste("variance =", round(var(response), 3) )), col = c("red", "blue", "white"), pch = c(16, 16), box.col = "white");box()
+```
+
+It seems like my population is not homogeneous and we can find at least
+3 other sub-populations which may be linked to some external factors. We
+assume that the population is heterogeneous.
+
+## DATASET (4)
+
+\justifying
+
+Thanks to the theory, it is possible to assume that there is an effect
+of the player's team on the player market value, even if they do not
+seem directly linked. In my opinion, it is related to the ranking
+position of the team and it can be considered as an "hidden" (latent)
+effect.
+
+```{r rank, echo=FALSE, fig.height = 4.7}
+boxplot(response~dataset$rank, ylim = c(16, 18.5), xlab = "rank", ylab = "log-market-value", main = "Conditional distribution(s)", varwidth = T);points(c(mean(response[dataset$rank == 1]), mean(response[dataset$rank == 2]), mean(response[dataset$rank == 3])), col = 'magenta', pch = 16)
+
+```
+
+## DATASET (5)
+
+\justifying
+
+I choose to organize this rank variable as follows:
+
+```{=tex}
+\begin{itemize}
+\item first ranked players belong to the top four teams (champions league);
+\item second ranked players belong to teams in the "left part" of the ranking board;
+\item third ranked players belong to teams in the "right part" of the ranking board. 
+\end{itemize}
+```
+From the boxplot, we can affirm that players with high values are in the
+first group, while low valuable players are in the third group. It seems
+like there is a linear negative effect.
+
+```{r rank2, echo=FALSE, comment=NA}
+V = rbind(round(summary(response[dataset$rank == 1]), 3), round(summary(response[dataset$rank == 2]), 3), round(summary( response[dataset$rank == 3]), 3))
+H = rbind(round(var(response[dataset$rank == 1]), 3), round(var(response[dataset$rank == 2]), 3), round(var(response[dataset$rank == 3]),3))
+colnames(H) = "variance"
+V = cbind(V, H)
+row.names(V) = paste("rank", sep = "", 1:3) 
+print(V)
+```
+
+## DATASET (7)
+
+\justifying
+
+Taking into account the existing literature, it is possible to divide
+our independent variables into three different fields:
+
+```{=tex}
+\begin{itemize}
+\item Player Characteristics (position, age, height, footedness);
+\item Player Performances (avm, goals, assists, scored penalties, yellow and red cards);
+\item Player Popularity (news!).
+\end{itemize}
+```
+
+## PLAYER CHARACTERISTICS (1)
+
+\justifying
+
+-   PITCH POSITION: the pitch position can be regarded as a degree of
+    specialization of a certain player. I decide to divide the fourth initial positions into three blocks, combining the effect of the  goalkeepers and       the defenders.
+
+```{r char, echo = F, fig.height = 4.5}
+dataset$position[dataset$position == "GK"] = 1
+dataset$position[dataset$position == "DF"] = 1
+dataset$position[dataset$position == "MF"] = 2
+dataset$position[dataset$position == "FW"] = 3
+boxplot(response ~ dataset$position, ylim = c(16, 18.5), xlab = "pitch-position", ylab = "log-market-value", main = "Conditional distribution(s) of log-market-value \n w.r.t. player's pitch position", names = c("DF - GK", "MF", "FW"), varwidth = T);points(c(mean(response[dataset$position==1]), mean(response[dataset$position ==2]), mean(response[dataset$position == 3])), col = "slateblue", pch = c(16, 16, 16), cex = 1.5)
+```
+
+## PLAYER CHARACTERISTICS (2)
+
+\justifying
+
+It seems that the field position has an influence on the average market
+value of a football player. As we expect, the well payed ones are the
+MF (FW) while the less payed are the DF-GK (this effect could depend on
+the chosen league!).
+
+```{r char2, comment=NA}
+prop.table(table(dataset$position))*100 
+```
+
+
+```{r char24, comment=NA}
+G = rbind(summary(response[dataset$position == 1]), summary(response[dataset$position == 2]), summary(response[dataset$position == 3]))
+row.names(G) = c("GK-DF", "MF", "FW")
+print(G)
+
+```
+
+
+## PLAYER CHARACTERISTICS (3)
+
+-   FOOTEDNESS: It is the ability of a player to use both feet and it
+    can be seen as a measure of mental elasticity.
+
+```{r foot, echo = F, fig.height = 3.7}
+boxplot(response~dataset$foot, xlab = "footedness", ylab = "log-market-value", main = "Conditional(s) distribution of the log-market-value \n w.r.t the footedness", ylim = c(16, 18.5), names = c("NO", "YES"), varwidth = T);points(c(mean(response[dataset$foot == 0]), mean(response[dataset$foot == 1])), col = "darkturquoise", pch = 16, cex = 1.5)
+```
+
+It has a positive relationship with the player's market value, although
+only the $8 \%$ of the player is able to use both feet.
+
+## PLAYER CHARACTERISTICS (4)
+
+-   AGE: It has been shown that age has a quadratic relationship with
+    the market value. Usually a player increases his value until a
+    certain age ($25$) while the value decreases when he become "old".
+
+```{r age, echo=F, fig.height=3.7}
+plot(dataset$age, response, xlim = c(15, 35), xlab = "Age", ylab = "log-market-value", ylim = c(16, 18.5), main = "Distribution of log-market-value \n over players ages")
+
+```
+
+It is possible to understand that there is not a proper linear
+relationship (as we expected). Furthermore, the average player has an
+age of $24.6$ years.
+
+## PLAYER CHARACTERISTICS (5)
+
+I would like to mention two players:
+
+```{=tex}
+\begin{itemize}
+\item the \textit{golden boy} \textbf{Matthijs de Ligt} ($19$ years old), with a value of $67$ millions;
+\item the \textit{goat} \textbf{Cristiano Ronaldo} ($34$ years old), with a value of $60$ millions. 
+\end{itemize}
+```
+```{r player, echo=FALSE, include=FALSE}
+dat[dat$age==19, c("player", "value")]
+dat[dat$age==34, c("player", "value")]
+dataset$age_in_class = NA
+dataset$age_in_class[dataset$age <=20] = 1
+dataset$age_in_class[dataset$age > 20 & dataset$age <= 25] = 2
+dataset$age_in_class[dataset$age > 25 & dataset$age <= 29] = 3
+dataset$age_in_class[dataset$age > 29 ] = 4
+unique(dataset$age_in_class)
+```
+
+In order to emphasize the tendency of the (log) market value through the
+different ages, i decide to divide it into four groups:
+
+```{=tex}
+\begin{itemize}
+\item[\ding{171}] "young age" $[17, 20]$
+\item[\ding{171}] "young-middle age $[21, 25]$
+\item[\ding{171}] "middle-old age" $[26, 29]$
+\item[\ding{171}] "old age" $[30, 34]$
+\end{itemize}
+```
+## PLAYER CHARACTERISTICS (6)
+
+Since i have chosen player with a value over $10$ millions, it is
+possible that the age is not useful to explain the (log) market value of
+a player.
+
+```{r age22, echo=FALSE, fig.height = 4}
+boxplot(response~dataset$age_in_class, xlab = "age in classes", ylab = "log-market-value", main = "Conditional(s) distribution of the log-market-value \n w.r.t the age in class", ylim = c(16, 18.5), names = c("Y", "Y-M", "M-O", "O"), varwidth = T);points(c(mean(response[dataset$age_in_class == 1]), mean(response[dataset$age_in_class == 2]), mean(response[dataset$age_in_class == 3]), mean(response[dataset$age_in_class == 4]) ), col = "slateblue4", pch = 16, cex = 1.5)
+
+```
+
+## PLAYER CHARACTERISTICS (7)
+
+```{r age333, echo=FALSE,comment=NA}
+G = rbind( round(summary(response[dataset$age_in_class == 1]), 3), round(summary(response[dataset$age_in_class == 2]), 3), round(summary(response[dataset$age_in_class == 3]), 3), round(summary(response[dataset$age_in_class == 4]), 3) )
+row.names(G) = c("Y", "Y-M", "M-O", "O")
+B = cbind(round(prop.table(table(dataset$age_in_class) ), 3) )*100
+colnames(B) = "perc"
+G = cbind(G, B)
+print(G)
+```
+In my opinion, it is not possible to stress out the difference between the fourth class and the others thanks to the presence of some outliers.
+
+## PLAYER CHARACTERISTICS (8)
+
+-   HEIGHT: The impact of the height of a player depends on the league
+    that we analyze and SERIE A is not a considered a \textit{tough}
+    league. I decide to divide the height into three groups:
+
+    ```{=tex}
+    \begin{itemize}
+    \item[\ding{168}] "low" $[163, 174]$;
+    \item[\ding{168}]  "medium" $(174, 185]$ (the average player has an height of $182.9$ cm);
+    \item[\ding{168}]  "high" $(185, 196]$.
+    \end{itemize}
+    ```
+
+```{r hei3, include=FALSE}
+summary(dataset$height) # 182.9 cm is the average height
+range(dataset$height)
+dataset$height_in_class = NA
+dataset$height_in_class[dataset$height <= 174] = 1
+dataset$height_in_class[dataset$height >174 & dataset$height <=185] = 2
+dataset$height_in_class[dataset$height >= 185 ] = 3
+```
+
+```{r hei2, echo=F}
+prop.table(table(dataset$height_in_class))*100
+```
+
+In our league of interest only few players have an height lower than
+$174$ cm
+
+## PLAYER CHARACTERISTICS (9)
+
+```{r hei, echo=FALSE, fig.height=5}
+boxplot(response~dataset$height_in_class, xlab = "height in classes", ylab = "log-market-value", main = "Conditional distribution(s) of log-market-value \n w.r.t height", ylim = c(16, 18.5), names = c("low", "medium", "high"), varwidth = T);points(c(mean(response[dataset$height_in_class == 1]), mean(response[dataset$height_in_class == 2]), mean(response[dataset$height_in_class == 3])), col = 'red', pch = 16) 
+```
+
+It is not easy to figure out a proper relationship between height and
+the market value.
+
+## PLAYER PERFORMANCES (1)
+
+-   AVM (average minutes per game): It has been shown that the number of
+    played games and the number of minutes on the field could have a
+    positive impact on the market value of a player. I decided to use an
+    index that take into account both of them.
+
+```{r perf, include=FALSE}
+dataset$avm = dataset$minutes/dataset$games
+dat[dataset$avm == max(dataset$avm), "player"]
+max(dataset$avm)
+dat[dataset$goals == 36, "player"]
+dat[dataset$assists == max(dataset$assists), "player"]
+dat[dataset$cards_yellow == max(dataset$cards_yellow), "player"]
+dat[dataset$cards_red == max(dataset$cards_red), "player"]
+
+```
+
+```{r perf2, echo = F, fig.height = 4.5}
+plot(dataset$avm, response, xlim = c(0, 100), ylim = c(16, 18.5), xlab = "Minutes-per-game", ylab = "log-market-value", main = "Distribution of the log-market-value \n w.r.t the minutes per game")
+```
+
+## PLAYER PERFORMANCES (2)
+
+
+-   GOALS and SCORED PENALTIES: They can be used in order to measure a
+    player' scoring ability. (positive effect)
+
+-   ASSISTS : It can be referred as player contribution to help others
+    score goals.(positive effect)
+
+-   YELLOW and RED CARDS : They are an indicator of a player behaviour
+    on the pitch. (negative effect)
+
+## PLAYER PERFORMANCES (3)
+
+I would like to make some remarks:
+\begin{itemize}
+\item Usually goalkeepers are the ones who play the most;
+\item \textbf{Ciro Immobile} is the top-scorer of the league with $36$ goals;
+\item \textbf{Papu Gomez} is the player who has more assists ($16$) in the league;
+\item \textbf{Gianluca Mancini} takes $16$ yellow cards while \textbf{Armando Izzo} takes $2$ red cards.
+\end{itemize}
+
+
+## PLAYER PERFORMANCES (4)
+
+```{r perf4, echo=FALSE, comment = NA}
+C = rbind(summary(dataset$goals), summary(dataset$assists), summary(dataset$pens_made), summary(dataset$cards_red), summary(dataset$cards_yellow))
+rownames(C) = c("goals", "assists", "pens_made", "red_cards", "yellow_cards")
+C
+```
+
+The average player is in the field for $70.33$ minutes per game during
+the all season, scoring $4.1$ goals, assisting $2.55$ times and scoring
+$0.6$ penalties. Moreover, it has taken $4.64$ yellow cards and $0.17$
+red cards
+
+## PLAYER PERFORMANCES (5)
+
+Intuitively, we have also to consider the \textit{interaction} between the
+position and the goals (assists) since this ability can be important
+only for players in a certain position.
+
+```{r interactive, echo = FALSE, fig.height=4}
+plot(dataset$goals, response, xlab = "goals", ylab = "log-market-value",  main = "Distribution of the log-market-value \n w.r.t the goals|position");points(dataset$goals[dataset$position ==1],response[dataset$position == 1], col = c('red'), pch = 16); points(dataset$goals[dataset$position == 2], response[dataset$position == 2], col = "violet", pch = 16);legend("bottomright", legend = c("GK-DF", "MF", "FW"), col = c("red","violet",  "black"), pch = c(16, 16, 1), box.col = "white");box()
+```
+
+As we expected, players who scored a lot of goals are forwards.
+
+## PLAYER PERFORMANCES (5)
+
+```{r interactiv2, echo=FALSE, fig.height=5.5}
+plot(dataset$assists, response, xlab = "assists", ylab = "log-market-value",  main = "Distribution of the log-market-value \n w.r.t the assists|position");points(dataset$assists[dataset$position == 1], response[dataset$position == 1], col = c('violetred'), pch = 16);points(dataset$assists[dataset$position == 2], response[dataset$position == 2], col = "green", pch = 16);legend("bottomright", legend = c("GK-DF", "MF", "FW"), col = c("violetred","green", "black"), pch = c(16, 16, 1), box.col = "white");box()
+```
+
+It is difficult to recognize a proper interaction effect in both the
+situations.
+
+## PLAYER PERFORMANCES (7)
+
+```{r interative4, echo = F, fig.height=5.3}
+plot(dataset$cards_yellow, response, xlab = "yellow cards", ylab = "log-market-value",  main = "Distribution of the log-market-value \n w.r.t the yellowcards|position");points(dataset$cards_yellow[dataset$position == 1], response[dataset$position == 1], col = 'darkgreen', pch = 16); points(dataset$cards_yellow[dataset$position == 2], response[dataset$position == 2], col = "orange", pch = 16);legend("topright", legend = c("GK-DF", "MF", "FW"), col = c("darkgreen","orange", "black"), pch = c(16, 16, 1), box.col = "white");box()
+
+```
+
+If a forward takes a lot of yellow cards it means that he helps his teammates in the defensive side.
+
+## PLAYER POPULARITY
+
+I collect an average value of the popularity of each player through the
+\textbf{Google Search Index} which takes values between 0 and 100. We
+need to understand that the popularity of a player could represent the
+impact that it has on sales (t-shirts, gadgets and so on).
+
+```{r pop, echo=F, fig.height = 4, comment=NA}
+O = rbind(summary(dataset$popularity))
+print(O)
+plot(dataset$popularity, response, xlab = "popularity", ylab = "log-market-value", ylim = c(16, 18.5), xlim = c(1, 31), main = "Distribution of the log-market-value \n w.r.t the player's popularity") 
+
+```
+
+## MODEL SPECIFICATION (1)
+
+\justifying
+
+According to me, we are facing a multilevel situation where players are
+the first level units while teams (ranked) are the second level units.
+Moreover, we assume that the rank has an effect on the players, so it is
+not possible anymore to talk about uncorrelation among units inside
+different groups (they have been influenced by the same factors).
+
+In order to accomplish the goal of explain such an abstract phenomenon,
+i choose a \textbf{Linear mixed effect model} only with a random
+intercept. First of all, we need some basic notation: \begin{align*}
+g & = 1, 2, 3 \rightarrow \text{number of groups} \\
+i & = 1, \ldots, n_{g} \rightarrow \text{number of players inside each team} \\
+Y_{g,i} & = \{ \text{(log) market value of the player i in the g-th team } \} \\
+\underline{Y}_{g} & = \{ \text{(log) market values of all the players in the g-th group} \}\in \left(n_{g} \times 1 \right)
+\end{align*}
+
+## MODEL SPECIFICATION (2)
+
+\begin{align*}
+\underline{X}_{g} & =  \begin{pmatrix}
+                        \underline{X}_{g,1}^{T}\\
+                        \vdots \\
+                        \underline{X}_{g,n_{g}}^{T}
+                      \end{pmatrix}
+                      \in \left( n_{g} \times k \right)
+ \quad \underline{X}_{g,i} = (X_{g,i,1}, \ldots, X_{g, i, k}) ^{T}
+\in (k \times 1) \\
+k & = \{ \text{number of variables} \} \quad X_{g, i, 1} = 1  \ \forall{g, i}
+\end{align*} $\underline{X}_{g, i}$ can be regarded as the profile of a
+player i inside the group g and the variables are assumed to be non
+stochastic (fixed). \begin{align*}
+\underline{\beta} = (\beta_{1}, \ldots, \beta_{k})^{T} \in \left(k \times 1 \right) 
+\end{align*} It can be interpreted as a vector of fixed effects since it
+does not depend on the membership groups
+
+## MODEL SPECIFICATION (3)
+
+```{=tex}
+\begin{align*}
+\underline{Z}_{g} & = \begin{pmatrix}
+                        {Z_{g,1}}\\
+                        \vdots \\
+                        {Z_{g,n_{g}}}
+                      \end{pmatrix} \in \left(n_{g} \times 1 \right) \rightarrow Z_{g,1} = Z_{g,2} = \ldots = Z_{g,ng} \quad  \forall g = 1, 2, 3 \\
+                      b_{g} & \rightarrow \text{it is the random effect linked to the g-th group} 
+\end{align*}
+```
+```{r c, echo=F, fig.height = 4}
+par(mfrow=c(1,1))
+par(mar=c(0,0,0,0),mgp=c(0,0,0))
+plot(c(.15,.85),c(.15,.85),type="n",xaxt="n",yaxt="n",xlab="",ylab="",bty="n");text( .5,.8 , expression(paste( b[g] ) ));arrows(  rep(.5,3), rep(.75,3), c(.2, 0.5,.8), rep(.65,4) ,length = 0.05, code = 2);text( c(.2,.5,.8), rep(.6,5), expression(Y[g][1], "....." ,Y[g][ng])); text(c(0.5), c(0.4), bquote("Hierarchical Structure"))
+
+```
+
+## MODEL SPECIFICATION (4)
+
+```{=tex}
+\begin{align*}
+& \underline{\varepsilon}_{g} = \begin{pmatrix}
+                                  \varepsilon_{g,1} \\
+                                  \vdots \\
+                                  \varepsilon_{g,n_{g}}
+                                \end{pmatrix} \rightarrow \text{it can be considered as a vector of  error terms}
+\end{align*}
+```
+Sampling model assumptions:
+
+```{=tex}
+\begin{itemize}
+\item[\ding{72}] 
+$\underline{\varepsilon}_{g} \perp b_{g}  \quad  g = 1, 2, 3$
+\item[\ding{72}] we assume that the group rank can only affect the intercept, because there aren't any variables linked to it
+\item[\ding{72}] $b_{g} \overset{i.i.d} \sim \mathbb{N} \left(0, \sigma^{2}_{b_{0}} \right) \ \forall{g} \rightarrow$ \textbf{BETWEEN SAMPLING MODEL}
+  \begin{itemize}
+    \item[\ding{172}] $\sigma^{2}_{b_{0}}$ measures the variability among groups
+  \end{itemize}
+\item[\ding{72}] $\underline{\varepsilon}_{g} \overset{i}{\sim} \mathbb{MVN}_{n_{g}} \left (\underline{0}, \underline{R}_{g} \right) \quad g = 1, 2, 3 $
+
+\end{itemize}
+```
+## MODEL SPECIFICATION (5)
+
+```{=tex}
+\begin{itemize}
+\item $\underline{R}_{g} = \sigma^{2}_{\varepsilon} I_{n_{g}}$
+  \begin{itemize}
+    \item[\ding{172}] the variability inside each group is the same and so the random effects are able to explain completely the dependence structure between units in the same group.
+  \end{itemize}
+  
+\item $ \underline{Y}_{g} = \underline{X}_{g} \underline{\beta} + \underline{Z}_{g}b_{g} + \underline{\varepsilon}_{g} $ \text{or} $Y_{g,i} = \underline{X}_{g,i}^{T}\underline{\beta} + \underline{Z}_{g,i}^{T}b_{g} + \varepsilon_{g} $
+\item $\underline{Y}_{g} \sim \mathbb{MVN}_{n_{g}} \left( \underline{X}_{g} \underline{\beta}, \sigma^{2}_{b_{0}}\underline{Z}_{g}\underline{Z}_{g}^{T} + \sigma^{2}_{\varepsilon} I_{n_{g}} \right)$ 
+\item $\underline{Y}_{g} \mid b_{g} \overset{i}{\sim} \mathbb{MVN}_{n_{g}} \left ( \underline{X}_{g} \underline{\beta} + \underline{Z}_{g}b_{g} , \sigma^{2}_{\varepsilon}I_{n_{g}} \right) \ \ g = 1, 2, 3 \rightarrow$   \ \textbf{WITHIN SAMPLING MODEL}
+\end{itemize}
+```
+Conditionally on the group effect, (log) market values can be considered
+independent since we are deleting their common factors.
+
+## MODEL SPECIFICATION (6)
+
+Thanks to the \textit{data augmentation} we are able to derive the
+complete data likelihood: \begin{align*}
+& L_{c}\left( b_{1}, b_{2}, b_{3}, \underline{\beta}, \sigma^{2}_{b_{0}}, \sigma^{2}_{\varepsilon} \right) \varpropto f \left(\underline{y}_{1}, \underline{y}_{2}, \underline{y}_{3}, b_{1}, b_{2}, b_{3} \mid \underline{\beta}, \sigma^{2}_{b_{0}}, \sigma^{2}_{\varepsilon} \right) = \\ = &  f \left( \underline{y}_{1}, \underline{y}_{2}, \underline{y}_{3} \mid b_{1}, b_{2}, b_{3}, \underline{\beta}, \sigma^{2}_{b_{0}}, \sigma^{2}_{\varepsilon} \right) \times f \left( b_{1}, b_{2}, b_{3} \mid \underline{\beta}, \sigma^{2}_{b_{0}}, \sigma^{2}_{\varepsilon} \right) \overset{i}{=}\\
+\overset{i}{=} & \prod_{g = 1}^{3} \prod_{i = 1}^{n_{g}} \mathbb{N} \left( y_{g,i}\mid \underline{X}_{g,i}^{T}\underline{\beta} + \underline{Z}_{g,i}^{T}b_{g}, \sigma^{2}_{\varepsilon} \right) \times \prod_{g = 1}^{3} \mathbb{N} \left( b_{g}\mid 0, \sigma^{2}_{b_{0}} \right)
+\end{align*}
+
+## PRIOR SPECIFICATION
+
+\begin{align*}
+  \begin{cases}
+      \underline{\beta} \sim \mathbb{MVN}_{k} \left( m_{0}, \Sigma_{0} \right)\\
+      \sigma^{2}_{\varepsilon} \sim \mathbb{InvGamma}\left( \frac{s_{0}}{2}, \frac{s_{0}\sigma^{2}_{0}}{2} \right)\\
+      \sigma^{2}_{b_{0}} \sim \mathbb{InvGamma} \left( \frac{d_{0}}{2}, \frac{d_{0} \phi^{2}_{0}}{2} \right)\\
+      \pi\left(\underline{\beta}, \sigma^{2}_{\varepsilon}, \sigma^{2}_{b_{0}} \right) \overset{i}{=} \pi \left(\underline{\beta} \right) \pi \left(\sigma^{2}_{\varepsilon} \right) \pi\left( \sigma^{2}_{b_{0}} \right)
+  \end{cases}
+\end{align*} $$
+\pi \left(\underline{\beta}, \sigma^{2}_{\varepsilon}, \sigma^2_{b_{0}} \mid \underline{y}_{1}, \underline{y}_{2}, \underline{y}_{3} \right) \propto \pi \left(\underline{\beta} \right) \pi \left(                             \sigma^{2}_{\varepsilon} \right) \pi\left( \sigma^{2}_{b_{0}} \right)  L_{c}\left( b_{1}, b_{2}, b_{3}, \underline{\beta}, \sigma^{2}_{b_{0}}, \sigma^{2}_{\varepsilon} \right)
+$$ \justifying Although it is not possible to explore directly the
+posterior distribution, it can be used a Gibbs Sampling method based on
+the Markov Chains. First of all, we need to derive in a closed form the
+so called \textit{full conditionals}.
+
+## FULL CONDITIONALS
+
+-   $\pi\left(\sigma^{2}_{\varepsilon} \mid \underline{y}_{1}, \underline{y}_{2}, \underline{y}_{3}, \underline{\beta}, b_{1}, b_{2}, b_{3} \right ) \sim \mathbb{InvGamma}\left( \frac{s_{n}}{2},\frac{s_{n}\sigma^{2}_{n}}{2}\right)$
+    $s_{n} = s_{0} + n \quad \sigma^{2}_{n} = \frac{1}{s_{n}}\bigg{[}\displaystyle\sum_{g=1}^{3} \displaystyle \sum_{i = 1}^{n_{g}}{ \left( \varepsilon_{g, i}\right )^{2}} + s_{0}\sigma^{2}_{0}\bigg{]}$
+
+-   $\pi \left(\underline{\beta} \mid \sigma^{2}_{\varepsilon}, \underline{y}_{1}, \underline{y}_{2}, \underline{y}_{3}, b_{1}, b_{2}, b_{3} \right) \sim \mathbb{MVN}_{k} \left(m_{n}, \Sigma_{n} \right )$
+    $\Sigma_{n} = \left(\Sigma_{0}^{-1} + \frac{\displaystyle\sum_{g = 1}^{3}{\underline{X}_{g}^{T}\underline{X}_{g}}}{\sigma^{2}_{\varepsilon}} \right)^{-1}$
+    $m_{n} = \Sigma_{n} \left(\Sigma_{0}^{-1}m_{0} + \displaystyle\sum_{g = 1}^{3}\frac{\underline{X}_{g}^{T} \left(\underline{y}_{g} - \underline{Z}_{g}b_{g}\right)}{\sigma^{2}_{\varepsilon}}\right)$
+
+## FULL CONDITIONALS (2)
+
+-   $\pi \left(\sigma^{2}_{b_{0}} \mid b_{1}, b_{2}, b_{3}\right) \sim \mathbb{InvGamma} \left( \frac{d_{n}}{2},\frac{d_{n}\phi^{2}_{n}}{2} \right)$
+    $d_{n} = d_{0} + G \quad \phi^{2}_{n} = \frac{1}{d_{n}}\bigg{[} \displaystyle\sum_{g = 1}^{3}{b^{2}_{g}} + d_{0}\phi^{2}_{0} \bigg{]}$
+
+-   $\pi(b_{g} \mid \sigma^{2}_{\varepsilon}, \underline{y}_{1}, \underline{y}_{2}, \underline{y}_{3}, \sigma^{2}_{b_{0}}, \underline{\beta}) \sim \mathbb{N} \left( \mu_{n}, \sigma^{2}_{b_{n}} \right)$
+    $\sigma^{2}_{b_{n}} = \left( {\frac{\underline{Z}_{g}^{T}\underline{Z}_{g}}{\sigma^{2}_{\varepsilon}}} + \frac{1}{\sigma^{2}_{b_{0}}} \right)^{-1} \quad \mu_{n} = \frac{\sigma^{2}_{n}}{\sigma^{2}_{\varepsilon}} \bigg{[}\underline{Z}_{g}^{T}\left( \underline{y}_{g} - \underline{X}_{g}\underline{\beta}\right) \bigg{]}$
+
+## MODEL DEFINITION (1)
+
+It is now time to define properly our model: \begin{align*}
+y_{g,i} & =  \left( \beta_{1} + b_{g} \right) + \beta_{2} \cdot \text{position2}_{g, i} + \beta_{3} \cdot \text{position3}_{g, i} + \beta_{4} \cdot \text{ageinclass2}_{g, i} \\ 
+& +\beta_{5} \cdot \text{ageinclass3}_{g,i} +  \beta_{6}\cdot\text{ageinclass4}_{g, i} + \beta_{7} \cdot \text{foot}_{g, i} + \beta_{8} \cdot \text{goals}_{g,i} \\
+& + \beta_{9} \cdot \text{assists}_{g, i} + \beta_{10} \cdot \text{penalties}_{g, i} + \beta_{11} \cdot \text{yellowcards}_{g, i} \\
+& + \beta_{12} \cdot \text{redcards}_{g, i} + \beta_{13} \cdot \text{popularity}_{g, i} + \beta_{14} \cdot\text{avm}_{g, i}\\ 
+& + \beta_{15}\cdot\text{heightclass2}_{g, i} + \beta_{16}\cdot\text{heightclass3}_{g, i}  \\
+& + \beta_{17} \cdot \left( \text{position2} \times \text{goals} \right)_{g, i} + \beta_{18} \cdot \left( \text{position3} \times \text{goals} \right)_{g, i} \\ & + \beta_{19}\cdot \left(\text{position2} \times \text{yellowcards} \right)_{g, i} +  \beta_{20}\cdot \left(\text{position3} \times \text{yellowcards} \right)_{g, i} \\ 
+& + \beta_{21} \cdot \left( \text{position2} \times \text{assists} \right)_{g, i} + \beta_{22} \cdot \left( \text{position3} \times \text{assists} \right)_{g, i} + \varepsilon_{g, i}
+\end{align*}
+
+## MODEL DEFINITION (2)
+
+$3$ remarks:
+
+```{=tex}
+\begin{itemize}
+\item it is a log-linear model, so coefficients have to be interpreted as percentage variations;
+\item we will use uninformative priors;
+\item we would like to understand which are the significant variables.
+\end{itemize}
+```
+
+```{r 23, include = F}
+colnames(dataset)
+str(dataset)
+dataset$height_in_class = as.character(dataset$height_in_class)
+dataset$age_in_class = as.character(dataset$age_in_class)
+dataset$foot = as.character(dataset$foot)
+attach(dataset)
+X = model.matrix(~ 1 + position + age_in_class + foot + goals + assists + pens_made + cards_yellow + cards_red + popularity + avm + height_in_class + rank)
+detach(dataset)
+X = as.data.frame(X)
+colnames(X)
+X$goals_mf = X$position2*X$goals
+X$goals_fw = X$position3*X$goals
+X$assists_mf = X$position2*X$assists
+X$assists_fw = X$position3*X$assists
+X$yellow_mf = X$cards_yellow*X$position2
+X$yellow_fw = X$cards_yellow*X$position3
+colnames(X)
+head(X)
+```
+
+## STARTING POINTS
+
+```{r 24, include = F}
+model = lmer(response ~ (1|rank) + position2 + position3 + age_in_class2 + age_in_class3 + age_in_class4 + foot1 + goals + assists + pens_made + cards_yellow + cards_red + popularity + avm + height_in_class2 + height_in_class3 + goals*position2 + goals*position3 + cards_yellow*position2 + cards_yellow*position3 + assists * position2 + assists * position3 , data = data.frame(X))
+
+round(fixef(model), 4)
+ranef(model)
+data.frame(VarCorr(model))
+```
+
+| \textbf{Coef} | \textbf{Eff}         | \textbf{Coef} | \textbf{Eff}         | $\sigma_{b_{0}}$ | $\sigma_{\varepsilon}$ |
+|---------------|----------------------|---------------|----------------------|------------------|------------------------|
+| $\beta_{1}$   | $15.982$             | $\beta_{15}$  | $\color{red}{0.025}$ | $0.3051$         | $0.41376$              |
+| $\beta_{2}$   | $0.162$              | $\beta_{16}$  | $\color{red}{0.036}$ |                  |                        |
+| $\beta_{3}$   | $0.166$              | $\beta_{17}$  | $\color{red}{0.086}$ |                  |                        |
+| $\beta_{4}$   | $\color{red}{0.098}$ | $\beta_{18}$  | $\color{red}{0.057}$ |                  |                        |
+| $\beta_{5}$   | $\color{red}{0.121}$ | $\beta_{19}$  | $\color{red}{0.015}$ |                  |                        |
+| $\beta_{6}$   | $\color{red}{0.652}$ | $\beta_{20}$  | $0.029$              |                  |                        |
+| $\beta_{7}$   | $0.282$              | $\beta_{21}$  | $0.143$              |                  |                        |
+| $\beta_{8}$   | $0.074$              | $\beta_{22}$  | $0.116$              |                  |                        |
+| $\beta_{9}$   | $\color{red}{0.104}$ | $b_{1}$       | $0.300$              |                  |                        |
+| $\beta_{10}$  | $\color{red}{0.018}$ | $b_{2}$       | $0.029$              |                  |                        |
+| $\beta_{11}$  | $0.013$              | $b_{3}$       | $\color{red}{0.329}$ |                  |                        |
+| $\beta_{12}$  | $\color{red}{0.073}$ |               |                      |                  |                        |
+| $\beta_{13}$  | $0.0001$             |               |                      |                  |                        |
+| $\beta_{14}$  | $0.009$              |               |                      |                  |                        |
+
+## POSTERIOR ANALYSIS (1)
+
+```{r mcmc2, include=FALSE}
+cat("model {
+
+for(k in 1:K){ # prior for beta
+	beta[k] ~ dnorm(0,0.001)
+}	
+
+tau.e ~ dgamma(0.001,0.001) # prior for the within group variance
+sigma.e <- 1/sqrt(tau.e)
+
+tau.b0 ~ dgamma(0.001,0.001) # prior variance for the between group variance
+sigma.b0 <- 1/sqrt(tau.b0)
+
+# Statistical (conditional) model
+for (j in 1:G) {
+
+  b0[j] ~ dnorm(0, tau.b0) # random intercept for each ranked player
+}
+
+for(i in 1:n){ # likelihood function !!
+	mu[i] <- beta[1] + b0[rank[i]] + beta[2] * position2[i] + beta[3] * position3[i] + beta[4] * ageinclass2[i] + beta[5] * ageinclass3[i] + beta[6]*ageinclass4[i] +  beta[7] * foot[i] + beta[8] * goals[i] + beta[9] *assists[i] + beta[10]* pens_made[i] + beta[11] *cards_yellow[i] + beta[12] * cards_red[i] + beta[13] * popularity[i] + beta[14] * avm[i] + beta[15] * height_in_class2[i] + beta[16] * height_in_class3[i] + beta[17] * goals[i] * position2[i] + beta[18] *goals[i] *position3[i] + beta[19] * cards_yellow[i] * position2[i] + beta[20] * cards_yellow[i] * position3[i] + beta[21] * assists[i] * position2[i] +  beta[22] * assists[i] * position3[i]
+
+	y[i] ~ dnorm(mu[i], tau.e)
+}
+
+}", file = "lmm.model.txt", fill = TRUE)
+
+inits = list( list(b0 = t(ranef(model)$rank)[1:3], 
+    beta = as.numeric(fixef(model)),
+       tau.e = 1/data.frame(VarCorr(model))[2, "sdcor"]^2,
+       tau.b0 = 1/data.frame(VarCorr(model))[1, "sdcor"]^2)
+)
+
+params = c("beta","sigma.e","sigma.b0", "b0")
+
+data.input = list(n = n, K = 22, G = 3, 
+                  y = response, ageinclass2 = X$age_in_class2, ageinclass3 = X$age_in_class3, ageinclass4 = X$age_in_class4, height_in_class2 = X$height_in_class2, height_in_class3 = X$height_in_class3, foot = X$foot, avm = X$avm, pens_made = X$pens_made, cards_yellow = X$cards_yellow, cards_red = X$cards_red, goals = X$goals, assists = X$assists, position2 = X$position2, position3 = X$position3, popularity = X$popularity, rank = X$rank)
+```
+
+```{r mcmc, echo=FALSE, include=FALSE}
+true.model.jags = jags(data = data.input, inits = inits,
+                     parameters.to.save = params,
+                     model.file ="lmm.model.txt",
+                     DIC = TRUE, n.chains = 1, n.iter=20000, n.burnin = 1100, n.thin = 2 )
+print(true.model.jags)
+str(true.model.jags)
+b1 = true.model.jags$BUGSoutput$sims.array[, 1, "b0[1]"]
+b2 = true.model.jags$BUGSoutput$sims.array[, 1, "b0[2]"]
+b3 = true.model.jags$BUGSoutput$sims.array[, 1, "b0[3]"]
+B1 = true.model.jags$BUGSoutput$sims.array[, 1, "beta[1]"]
+B2 = true.model.jags$BUGSoutput$sims.array[, 1, "beta[2]"]
+B3 = true.model.jags$BUGSoutput$sims.array[, 1, "beta[3]"]
+B4 = true.model.jags$BUGSoutput$sims.array[, 1, "beta[4]"]
+B5 = true.model.jags$BUGSoutput$sims.array[, 1, "beta[5]"]
+B6 = true.model.jags$BUGSoutput$sims.array[, 1, "beta[6]"]
+B7 = true.model.jags$BUGSoutput$sims.array[, 1, "beta[7]"]
+B8 = true.model.jags$BUGSoutput$sims.array[, 1, "beta[8]"]
+B9 = true.model.jags$BUGSoutput$sims.array[, 1, "beta[9]"]
+B10 = true.model.jags$BUGSoutput$sims.array[, 1, "beta[10]"]
+B11 = true.model.jags$BUGSoutput$sims.array[, 1, "beta[11]"]
+B12 = true.model.jags$BUGSoutput$sims.array[, 1, "beta[12]"]
+B13 = true.model.jags$BUGSoutput$sims.array[, 1, "beta[13]"]
+B14 = true.model.jags$BUGSoutput$sims.array[, 1, "beta[14]"]
+B15 = true.model.jags$BUGSoutput$sims.array[, 1, "beta[15]"]
+B16 = true.model.jags$BUGSoutput$sims.array[, 1, "beta[16]"]
+B17 = true.model.jags$BUGSoutput$sims.array[, 1, "beta[17]"]
+B18 = true.model.jags$BUGSoutput$sims.array[, 1, "beta[18]"]
+B19 = true.model.jags$BUGSoutput$sims.array[, 1, "beta[19]"]
+B20 = true.model.jags$BUGSoutput$sims.array[, 1, "beta[20]"]
+B21 = true.model.jags$BUGSoutput$sims.array[, 1, "beta[21]"]
+B22 = true.model.jags$BUGSoutput$sims.array[, 1, "beta[22]"]
+sigma.b0 = true.model.jags$BUGSoutput$sims.array[, 1, "sigma.b0"]
+sigma.e = true.model.jags$BUGSoutput$sims.array[, 1, "sigma.e"]
+P = data.frame( rep(c(paste("beta",sep = "", 1:22 ), bquote("sigma[b0]"), bquote("sigma[e]")), each = 9450), rep(0, 226800))
+colnames(P) = c("x", "y")
+P[P$x == "beta1", 2 ] = B1
+P[P$x == "beta2", 2 ] = B2
+P[P$x == "beta3", 2 ] = B3
+P[P$x == "beta4", 2 ] = B4
+P[P$x == "beta5", 2 ] = B5
+P[P$x == "beta6", 2 ] = B6
+P[P$x == "beta7", 2 ] = B7
+P[P$x == "beta8", 2 ] = B8
+P[P$x == "beta9", 2 ] = B9
+P[P$x == "beta10", 2 ] = B10
+P[P$x == "beta11", 2 ] = B11
+P[P$x == "beta12", 2 ] = B12
+P[P$x == "beta13", 2 ] = B13
+P[P$x == "beta14", 2 ] = B14
+P[P$x == "beta15", 2 ] = B15
+P[P$x == "beta16", 2 ] = B16
+P[P$x == "beta17", 2 ] = B17
+P[P$x == "beta18", 2 ] = B18
+P[P$x == "beta19", 2 ] = B19
+P[P$x == "beta20", 2 ] = B20
+P[P$x == "beta21", 2 ] = B21
+P[P$x == "beta22", 2 ] = B22
+P[P$x == "sigma[b0]", 2 ] = sigma.b0
+P[P$x == "sigma[e]", 2 ] = sigma.e
+mean(b1)
+mean(b2)
+mean(b3)
+mean(B1)
+mean(B2)
+mean(B3)
+mean(B4)
+mean(B5)
+mean(B6)
+mean(B7)
+mean(B8)
+mean(B9)
+mean(B10)
+mean(B11)
+mean(B12)
+mean(B13)
+mean(B14)
+mean(B15)
+mean(B16)
+mean(B17)
+mean(B18)
+mean(B19)
+mean(B20)
+mean(B21)
+mean(B22)
+
+str(true.model.jags)
+sqrt(var(b1)/effectiveSize(b1))
+sqrt(var(b2)/effectiveSize(b2))
+sqrt(var(b3)/effectiveSize(b3))
+sqrt(var(B1)/effectiveSize(B1))
+sqrt(var(B2)/effectiveSize(B2))
+sqrt(var(B3)/effectiveSize(B3))
+sqrt(var(B4)/effectiveSize(B4))
+sqrt(var(B5)/effectiveSize(B5))
+sqrt(var(B6)/effectiveSize(B6))
+sqrt(var(B7)/effectiveSize(B7))
+sqrt(var(B8)/effectiveSize(B8))
+sqrt(var(B9)/effectiveSize(B9))
+sqrt(var(B10)/effectiveSize(B10))
+sqrt(var(B11)/effectiveSize(B11))
+sqrt(var(B12)/effectiveSize(B12))
+sqrt(var(B13)/effectiveSize(B13))
+sqrt(var(B14)/effectiveSize(B14))
+sqrt(var(B15)/effectiveSize(B15))
+sqrt(var(B16)/effectiveSize(B16))
+sqrt(var(B17)/effectiveSize(B17))
+sqrt(var(B18)/effectiveSize(B18))
+sqrt(var(B19)/effectiveSize(B19))
+sqrt(var(B20)/effectiveSize(B20))
+sqrt(var(B21)/effectiveSize(B21))
+sqrt(var(B22)/effectiveSize(B22))
+mean(sigma.b0)
+mean(sigma.e)
+sqrt(var(sigma.b0)/effectiveSize(sigma.b0))
+sqrt(var(sigma.e)/effectiveSize(sigma.e))
+# l = c(0.05, 0.15, 0.30, 0.45, 0.60, 0.75, 0.955)
+```
+
+```{r MCMC222, echo=FALSE,fig.height=5.6}
+par(mfrow = c(2, 2))
+plot(B1, type = "b", col = 'red', ylab = bquote(beta[1]), xlab = "iterations");plot(1:length(B1), cumsum(B1)/(1:length(B1)), col = "red", type = "b", xlab = "iterations", ylab = "mean");plot(B2, type = "b", col = 'blue', ylab = bquote(beta[2]), xlab = "iterations");plot(1:length(B2), cumsum(B2)/(1:length(B2)), col = "blue", type = "b", xlab = "iterations", ylab = "mean")
+```
+
+## POSTERIOR ANALYSIS (2)
+
+```{r MCMC111, echo=FALSE, fig.height=5.6}
+par(mfrow = c(2, 2))
+plot(B3, type = "b", col = 'darkorange', ylab = bquote(beta[3]), xlab = "iterations");plot(1:length(B3), cumsum(B3)/(1:length(B3)), col = "darkorange", type = "b", xlab = "iterations", ylab = "mean");plot(B4, type = "b", col = 'darkorchid1', ylab = bquote(beta[4]), xlab = "iterations");plot(1:length(B4), cumsum(B4)/(1:length(B4)), col = "darkorchid1", type = "b", xlab = "iterations", ylab = "mean")
+```
+
+## POSTERIOR ANALYSIS (3)
+
+```{r MCMC000, echo=FALSE, fig.height=5.6}
+par(mfrow = c(2, 2))
+plot(B5, type = "b", col = 'firebrick', ylab = bquote(beta[5]), xlab = "iterations");plot(1:length(B5), cumsum(B5)/(1:length(B5)), col = "firebrick", type = "b", xlab = "iterations", ylab = "mean");plot(B6, type = "b", col = 'deepskyblue2', ylab = bquote(beta[6]), xlab = "iterations");plot(1:length(B6), cumsum(B6)/(1:length(B6)), col = "deepskyblue2", type = "b", xlab = "iterations", ylab = "mean")
+```
+
+## POSTERIOR ANALYSIS (4)
+
+```{r MCMC333, echo=FALSE, fig.height=5.6}
+par(mfrow = c(2, 2))
+plot(B7, type = "b", col = 'hotpink', ylab = bquote(beta[7]), xlab = "iterations");plot(1:length(B7), cumsum(B7)/(1:length(B7)), col = "hotpink", type = "b", xlab = "iterations", ylab = "mean");plot(B8, type = "b", col = 'green3', ylab = bquote(beta[8]), xlab = "iterations");plot(1:length(B8), cumsum(B8)/(1:length(B8)), col = "green3", type = "b", xlab = "iterations", ylab = "mean")
+```
+
+## POSTERIOR ANALYSIS (5)
+
+```{r MCMC444, echo=FALSE, fig.height=5.6}
+par(mfrow = c(2, 2))
+plot(B9, type = "b", col = 'orangered', ylab = bquote(beta[9]), xlab = "iterations");plot(1:length(B9), cumsum(B9)/(1:length(B9)), col = "orangered", type = "b", xlab = "iterations", ylab = "mean");plot(B10, type = "b", col = 'magenta4', ylab = bquote(beta[10]), xlab = "iterations");plot(1:length(B10), cumsum(B10)/(1:length(B10)), col = "magenta4", type = "b", xlab = "iterations", ylab = "mean")
+```
+
+## POSTERIOR ANALYSIS (6)
+
+```{r MCMC666, echo=FALSE, fig.height=5.6}
+par(mfrow = c(2, 2))
+plot(B11, type = "b", col = 'royalblue', ylab = bquote(beta[11]), xlab = "iterations");plot(1:length(B11), cumsum(B11)/(1:length(B11)), col = "royalblue", type = "b", xlab = "iterations", ylab = "mean");plot(B12, type = "b", col = 'purple', ylab = bquote(beta[12]), xlab = "iterations");plot(1:length(B12), cumsum(B12)/(1:length(B12)), col = "purple", type = "b", xlab = "iterations", ylab = "mean")
+```
+
+## POSTERIOR ANALYSIS (7)
+
+```{r MCMC777, echo=FALSE, fig.height=5.6}
+par(mfrow = c(2, 2))
+plot(B13, type = "b", col = '#DE7490', ylab = bquote(beta[13]), xlab = "iterations");plot(1:length(B13), cumsum(B13)/(1:length(B13)), col = "#DE7490", type = "b", xlab = "iterations", ylab = "mean");plot(B14, type = "b", col = '#9C2AC4', ylab = bquote(beta[14]), xlab = "iterations");plot(1:length(B14), cumsum(B14)/(1:length(B14)), col = "#9C2AC4", type = "b", xlab = "iterations", ylab = "mean")
+```
+
+## POSTERIOR ANALYSIS (8)
+
+```{r MCMC18191891, echo=FALSE, fig.height=5.6}
+par(mfrow = c(2, 2))
+plot(B15, type = "b", col = 'seagreen', ylab = bquote(beta[15]), xlab = "iterations");plot(1:length(B15), cumsum(B15)/(1:length(B15)), col = "seagreen", type = "b", xlab = "iterations", ylab = "mean");plot(B16, type = "b", col = 'slateblue', ylab = bquote(beta[16]), xlab = "iterations");plot(1:length(B16), cumsum(B16)/(1:length(B16)), col = "slateblue", type = "b", xlab = "iterations", ylab = "mean")
+```
+
+
+## POSTERIOR ANALYSIS (9)
+
+```{r MCMC181918912, echo=FALSE, fig.height=5.6}
+par(mfrow = c(2, 2))
+plot(B17, type = "b", col = '#FF2272', ylab = bquote(beta[17]), xlab = "iterations");plot(1:length(B17), cumsum(B17)/(1:length(B17)), col = "#FF2272", type = "b", xlab = "iterations", ylab = "mean");plot(B18, type = "b", col = '#C3B4FF', ylab = bquote(beta[18]), xlab = "iterations");plot(1:length(B18), cumsum(B18)/(1:length(B18)), col = "#C3B4FF", type = "b", xlab = "iterations", ylab = "mean")
+```
+
+
+## POSTERIOR ANALYSIS (10)
+
+```{r MCMC1819189123, echo=FALSE, fig.height=5.6}
+par(mfrow = c(2, 2))
+plot(B19, type = "b", col = '#2AFFC0', ylab = bquote(beta[19]), xlab = "iterations");plot(1:length(B19), cumsum(B19)/(1:length(B19)), col = "#2AFFC0", type = "b", xlab = "iterations", ylab = "mean"); plot(B20, type = "b", col = 'orange', ylab = bquote(beta[20]), xlab = "iterations");plot(1:length(B20), cumsum(B20)/(1:length(B20)), col = "orange", type = "b", xlab = "iterations", ylab = "mean")
+```
+
+
+## POSTERIOR ANALYSIS (11)
+
+```{r MCrt, echo=FALSE, fig.height=5.6}
+par(mfrow = c(2, 2))
+plot(B21, type = "b", col = 'red', ylab = bquote(beta[21]), xlab = "iterations");plot(1:length(B21), cumsum(B21)/(1:length(B21)), col = "red", type = "b", xlab = "iterations", ylab = "mean"); plot(B22, type = "b", col = '#2AFFC0', ylab = bquote(beta[22]), xlab = "iterations");plot(1:length(B22), cumsum(B22)/(1:length(B22)), col = "#2AFFC0", type = "b", xlab = "iterations", ylab = "mean")
+```
+
+
+
+## POSTERIOR ANALYSIS (12)
+
+
+```{r MCMC999, echo=FALSE, fig.height=5.6}
+par(mfrow = c(2, 2))
+plot(sigma.b0, type = "b", col = 'steelblue', ylab = bquote(sigma[b0]), xlab = "iterations");plot(1:length(sigma.b0), cumsum(sigma.b0)/(1:length(sigma.b0)), col = "steelblue", type = "b", xlab = "iterations", ylab = "mean");plot(sigma.e, type = "b", col = 'tomato', ylab = bquote(sigma[e]), xlab = "iterations");plot(1:length(sigma.e), cumsum(sigma.e)/(1:length(sigma.e)), col = "tomato", type = "b", xlab = "iterations", ylab = "mean")
+```
+
+## POSTERIOR ANALYSIS (13)
+
+```{r ridges , warning=FALSE, echo=FALSE, fig.height=5.6, comment=NA}
+ggplot(data = P[P$x == c("beta8", "beta9", "beta10", "beta11", "beta13", "beta14", "beta17", "beta18" , "beta19", "beta20", "beta21", "beta22"),], aes(x = y, y = x, fill = x)) +
+  geom_density_ridges(scale = 2) +
+  xlim(-0.2, 0.2) + 
+  xlab("value")
+```
+
+## POSTERIOR ANALYSIS (14)
+
+```{r ridges2 , warning=FALSE, echo=FALSE, fig.height=5.6}
+ggplot(data = P[P$x== c("beta2", "beta3", "beta4", "beta5", "beta6", "beta7", "beta12", "beta15", "beta16"), ], aes(x = y, y = x, fill = x)) +
+  geom_density_ridges(scale = 2) + 
+  xlim(-1.2, 1.2)
+  xlab("value")
+```
+
+## POSTERIOR ANALYSIS (15)
+```{r ridges3, echo=FALSE, fig.height=6}
+par(mfrow = c(3, 1))
+plot(density(sigma.b0), lwd = 3, xlab = "value", main = bquote(sigma[b0]), xlim = c(0, 1.5));plot(density(sigma.e), xlab = "value", main = bquote(sigma[e]), lwd = 3);plot(density(B1), xlab = "value", main = bquote(beta[1]), lwd = 3, xlim = c(13, 20))
+
+```
+
+## POSTERIOR ANALYSIS (16)
+
+| \text{params} | $\mu$                 | \text{sd}  | \text{params}          | $\mu$                  | \text{sd}     |
+|---------------|-----------------------|------------|------------------------|------------------------|---------------|
+| $b_{1}$       | $0.306$               | $0.0074$   | $\beta_{12}$           | $\color{red}{0.074}$   | $0.0009$      |
+| $b_{2}$       | $0.037$               | $0.0074$   | $\beta_{13}$           | $\color{red}{3e^{-05}}$| $7.4e^{-05}$  |
+| $b_{3}$       | $\color{red}{0.318}$  | $0.0073$   | $\beta_{14}$           | $0.009$                | $3.5e^{-05}$  |
+| $\beta_{1}$   | $15.977$              | $0.0081$   | $\beta_{15}$           | $\color{red}{0.027}$   | $0.0012$      |
+| $\beta_{2}$   | $0.161$               | $0.0017$   | $\beta_{16}$           | $\color{red}{0.035}$   | $0.0012$      |
+| $\beta_{3}$   | $0.165$               | $0.0021$   | $\beta_{17}$           | $\color{red}{0.086}$   | $0.0004$      |
+| $\beta_{4}$   | $\color{red}{0.096}$  | $0.0012$   | $\beta_{18}$           | $\color{red}{0.057}$   | $0.0004$      |
+| $\beta_{5}$   | $\color{red}{0.119}$  | $0.0013$   | $\beta_{19}$           | $\color{red}{0.015}$   | $0.0002$      |
+| $\beta_{6}$   | $\color{red}{0.649}$  | $0.0018$   | $\beta_{20}$           | $0.029$                | $0.0004$      |
+| $\beta_{7}$   | $0.282$               | $0.0004$   | $\beta_{21}$           | $0.143$                | $0.0004$      |
+| $\beta_{8}$   | $0.074$               | $0.0004$   | $\beta_{22}$           | $0.115$                | $0.0005$      |
+| $\beta_{9}$   | $\color{red}{0.103}$  | $0.0003$   | $\sigma_{b_{0}}$       | $0.5705$               | $0.01640$     |
+| $\beta_{10}$  | $\color{red}{0.019}$  | $0.0003$   | $\sigma_{\varepsilon}$ | $0.4131$               | $0.00028$     |
+| $\beta_{11}$  | $0.014$               | $0.0002$   |                        |                        |               |
+
+## HYPOTHESIS TESTS (1)
+
+In order to give an answer to the hypothesis testing, it is possible to
+compare the \textbf{DIC} between the linear (fixed effect) model and a the linear mixed effect model .
+\begin{align*}
+\begin{cases}
+H_{0}: \sigma_{b_{0}} = 0 \\
+H_{1}: \sigma_{b_{0}} > 0
+\end{cases}
+\end{align*}
+
+
+```{r rope, echo=FALSE,include=FALSE}
+cat("model {
+
+for(k in 1:K){ # prior for beta
+	beta[k] ~ dnorm(0,0.001)
+}	
+
+tau.e ~ dgamma(0.001,0.001) # prior for the within group variance
+sigma.e <- 1/sqrt(tau.e)
+
+# Statistical (conditional) model
+
+for(i in 1:n){ # likelihood function !!
+	mu[i] <- beta[1]  + beta[2] * position2[i] + beta[3] * position3[i] + beta[4] * ageinclass2[i] + beta[5] * ageinclass3[i] + beta[6]*ageinclass4[i] +  beta[7] * foot[i] + beta[8] * goals[i] + beta[9] *assists[i] + beta[10]* pens_made[i] + beta[11] *cards_yellow[i] + beta[12] * cards_red[i] + beta[13] * popularity[i] + beta[14] * avm[i] + beta[15] * height_in_class2[i] + beta[16] * height_in_class3[i] + beta[17] * goals[i] * position2[i] + beta[18] *goals[i] *position3[i] + beta[19] * cards_yellow[i] * position2[i] + beta[20] * cards_yellow[i] * position3[i] + beta[21] * assists[i] * position2[i] +  beta[22] * assists[i] * position3[i]
+	y[i] ~ dnorm(mu[i], tau.e)
+}
+
+}", file = "linear.model.txt", fill = TRUE)
+parameters = c("beta","sigma.e")
+
+model1 = lm(response ~ position2 + position3 + age_in_class2 + age_in_class3 + age_in_class4 + foot1 + goals + assists + pens_made + cards_yellow + cards_red + popularity + avm + height_in_class2 + height_in_class3 + goals*position2 + goals*position3 + cards_yellow*position2 + cards_yellow * position3 + assists * position2 + assists*position3, data = data.frame(X))
+
+initials = list(list(beta = as.numeric(model1$coefficients),
+       tau.e = 1/var(model1$residuals))
+)
+
+data.input2 = list(n = n, K = 22, 
+                  y = response, ageinclass2 = X$age_in_class2, ageinclass3 = X$age_in_class3, ageinclass4 = X$age_in_class4, height_in_class2 = X$height_in_class2, height_in_class3 = X$height_in_class3, foot = X$foot, avm = X$avm, pens_made = X$pens_made, cards_yellow = X$cards_yellow, cards_red = X$cards_red, goals = X$goals, assists = X$assists, position2 = X$position2, position3 = X$position3, popularity = X$popularity, rank = X$rank)
+
+true.model.jags2 = jags(data = data.input2, inits = initials,
+                     parameters.to.save = parameters,
+                     model.file ="linear.model.txt",
+                     DIC = TRUE, n.chains = 1, n.iter=20000, n.burnin = 1100, n.thin = 2 )
+
+```
+
+
+```{r comp, echo=FALSE}
+L = rbind(true.model.jags$BUGSoutput$DIC
+,true.model.jags2$BUGSoutput$DIC)
+colnames(L) = "DIC"
+row.names(L) = paste("model", sep = "", 1:2)
+print(L)
+
+```
+
+We can reject the null hypothesis since the first model has a lower DIC. Given the $90 \%$ HDI, we are able to test the coeffcients.
+
+## HYPOTHESIS TESTS (2)
+\begin{align*}
+\begin{cases}
+H_{0}: \beta_{g}  = 0\\
+H_{1}: \beta_{g} \ne0
+\end{cases}
+\end{align*}
+
+
+```{r test, echo=FALSE, comment=NA}
+M = rbind(hdi(B1, ci = 0.90), hdi(B2, ci = 0.90), hdi(B3, ci = 0.90), hdi(B4, ci = 0.90), hdi(B5, ci = 0.90), hdi(B6, ci = 0.90), hdi(B7, ci = 0.90), hdi(B8, ci = 0.90), hdi(B9, ci = 0.90))
+rownames(M) = paste("beta",sep = "", 1:9 )
+M = as.matrix(M)
+print(round(M, 3)[,2:3])
+
+```
+
+## HYPOTHESIS TESTS (3)
+
+```{r test33, echo=FALSE, comment=NA}
+M = rbind(hdi(B10, ci = 0.90), hdi(B11, ci = 0.90), hdi(B12, ci = 0.90), hdi(B13, ci = 0.90), hdi(B14, ci = 0.90), hdi(B15, ci = 0.90), hdi(B16, ci = 0.90), hdi(B17, ci = 0.90), hdi(B18, ci = 0.90), hdi(B19, ci = 0.90), hdi(B20, ci = 0.90), hdi(B21, ci = 0.90), hdi(B22, ci = 0.90))
+rownames(M) = paste("beta",sep = "", 10:22 )
+M = as.matrix(M)
+print(round(M, 3)[,2:3])
+
+```
+
+## ALTERNATIVE MODEL
+
+It is possible to figure out a new model based on the previous
+hypothesis testing and then we can compare it with the previous one:
+\begin{align*}
+y_{g,i}  = & \left( \beta_{1} + b_{g} \right) +  \beta_{2} \cdot\text{ageinclass4}_{g,i} + \beta_{3}\cdot\text{foot}_{g,i} + \beta_{4} \cdot \text{goals}_{g,i} \\
+& + \beta_{5} \cdot \text{assists}_{g,i} + \beta_{6} \cdot \text{avm}_{g, i} + \beta_{7} \left( \text{goals} \times \text{position2} \right)_{g, i} \\ 
+& + \beta_{8}  \left(\text{assists} \times \text{position2}\right)_{g, i}  + \beta_{9}  \left(\text{assists} \times \text{position3}\right)_{g, i} + \varepsilon_{g, i}
+\end{align*}
+
+```{r alternative, echo=FALSE, include=FALSE}
+attach(X)
+model2 = lmer(response ~ (1|rank) + age_in_class4 +  foot1 + goals + assists + avm + goals*position2 +  assists*position2 + assists *position3 - position2 - position3 , data = data.frame(X))
+detach(X)
+round(fixef(model2), 3)
+ranef(model2)
+data.frame(VarCorr(model2))
+```
+
+## STARTING POINTS
+
+| \textbf{Coef} | \textbf{Fixef}      | \textbf{Coef} | \textbf{Ranef}     | $\sigma_{b_{0}}$ | $\sigma_{\varepsilon}$ |
+|---------------|---------------------|---------------|--------------------|------------------|------------------------|
+| $\beta_{1}$   | $16.120$            | $b_{1}$       | $0.268$            | $0.301$          | $0.405$                |
+| $\beta_{2}$   | $\color{red}{0.538}$| $b_{2}$       | $0.046$            |                  |                        |
+| $\beta_{3}$   | $0.285$             | $b_{3}$       |$\color{red}{0.314}$|                  |                        |
+| $\beta_{4}$   | $0.023$             |               |                    |                  |                        |
+| $\beta_{5}$   | $\color{red}{0.077}$|               |                    |                  |                        | 
+| $\beta_{6}$   | $0.008$             |               |                    |                  |                        | 
+| $\beta_{7}$   | $\color{red}{0.039}$|               |                    |                  |                        | 
+| $\beta_{8}$   | $0.122$             |               |                    |                  |                        |
+| $\beta_{9}$   | $0.102$             |               |                    |                  |                        |
+
+## POSTERIOR ANALYSIS (1)
+
+```{r mcmcmc, echo=FALSE, include=FALSE}
+
+cat("model {
+
+for(k in 1:K){ # prior for beta
+	beta[k] ~ dnorm(0,0.001)
+}	
+
+tau.e ~ dgamma(0.001,0.001) # prior for the within group variance
+sigma.e <- 1/sqrt(tau.e)
+
+tau.b0 ~ dgamma(0.001,0.001) # prior variance for the between group variance
+sigma.b0 <- 1/sqrt(tau.b0)
+
+# Statistical (conditional) model
+for (j in 1:G) {
+
+  b0[j] ~ dnorm(0, tau.b0) # random intercept for each ranked player
+}
+
+for(i in 1:n){ # likelihood function !!
+	mu[i] <- beta[1] + b0[rank[i]] + beta[2] * ageinclass4[i] + beta[3] * foot[i] + beta[4] * goals[i] + beta[5] * assists[i] + beta[6] * avm[i] + beta[7] * goals[i] *position2[i] + beta[8] * position2[i] * assists[i] +  beta[9] * position3[i]*assists[i]
+
+	y[i] ~ dnorm(mu[i], tau.e)
+}
+}", file = "lmm-alternative.model.txt", fill = TRUE)
+
+
+params = c("beta","sigma.e","sigma.b0", "b0")
+
+inits2 =list(
+  list(b0 = t(ranef(model2)$rank)[1:3], 
+       beta = as.numeric(fixef(model2)),
+       tau.e = 1/data.frame(VarCorr(model2))[2, "sdcor"]^2,
+       tau.b0 = 1/data.frame(VarCorr(model2))[1, "sdcor"]^2)
+)
+
+data.input2 = list(n = nrow(X), K = 9, G = 3, 
+                  y = response, foot = X$foot, avm = X$avm, goals = X$goals, position2 = X$position2, position3 = X$position3,  rank = X$rank, assists = X$assists, ageinclass4 = X$age_in_class4)
+
+
+true.model.jags2 = jags(data = data.input2, inits = inits2,
+                       parameters.to.save = params,
+                       model.file ="lmm-alternative.model.txt",
+                       DIC = TRUE, n.chains = 1, n.iter=20000, n.burnin = 1100, n.thin = 2 )
+print(true.model.jags2)
+true.mcmc = as.mcmc(true.model.jags2)
+
+a1 = true.model.jags2$BUGSoutput$sims.array[, 1, "b0[1]"]
+a2 = true.model.jags2$BUGSoutput$sims.array[, 1, "b0[2]"]
+a3 = true.model.jags2$BUGSoutput$sims.array[, 1, "b0[3]"]
+A1 = true.model.jags2$BUGSoutput$sims.array[, 1, "beta[1]"]
+A2 = true.model.jags2$BUGSoutput$sims.array[, 1, "beta[2]"]
+A3 = true.model.jags2$BUGSoutput$sims.array[, 1, "beta[3]"]
+A4 = true.model.jags2$BUGSoutput$sims.array[, 1, "beta[4]"]
+A5 = true.model.jags2$BUGSoutput$sims.array[, 1, "beta[5]"]
+A6 = true.model.jags2$BUGSoutput$sims.array[, 1, "beta[6]"]
+A7 = true.model.jags2$BUGSoutput$sims.array[, 1, "beta[7]"]
+A8 = true.model.jags2$BUGSoutput$sims.array[, 1, "beta[8]"]
+A9 = true.model.jags2$BUGSoutput$sims.array[, 1, "beta[9]"]
+sigmaa = true.model.jags2$BUGSoutput$sims.array[, 1, "sigma.b0"]
+sigmae = true.model.jags2$BUGSoutput$sims.array[, 1, "sigma.e"]
+print(true.model.jags2)
+mean(a1)
+mean(a2)
+mean(a3)
+C1 = mean(A1)
+C2 = mean(A2)
+C3 = mean(A3)
+C4 = mean(A4)
+C5 = mean(A5)
+C6 = mean(A6)
+C7 = mean(A7)
+C8 = mean(A8)
+C9 = mean(A9)
+mean(sigmaa)
+mean(sigmae)
+library(coda)
+sqrt(var(a1)/effectiveSize(a1))
+sqrt(var(a2)/effectiveSize(a2))
+sqrt(var(a3)/effectiveSize(a3))
+v1 = sqrt(var(A1)/effectiveSize(A1))
+v2 = sqrt(var(A2)/effectiveSize(A2))
+v3 = sqrt(var(A3)/effectiveSize(A3))
+v4 = sqrt(var(A4)/effectiveSize(A4))
+v5 = sqrt(var(A5)/effectiveSize(A5))
+v6 = sqrt(var(A6)/effectiveSize(A6))
+v7 = sqrt(var(A7)/effectiveSize(A7))
+v8 = sqrt(var(A8)/effectiveSize(A8))
+v9 = sqrt(var(A9)/effectiveSize(A9))
+V = c(v1, v2, v3, v4, v5, v6, v7, v8)
+sqrt(var(sigmaa)/effectiveSize(sigmaa))
+sqrt(var(sigmae)/effectiveSize(sigmae))
+```
+
+| \text{params}          | $\mu$                   | \text{sd}    | \text{params}         | $\mu$       | \text{sd} |
+|------------------------|-------------------------|--------------|-----------------------|-------------|-----------|
+| $b_{1}$                | $0.274$                 | $0.0073$     | $\beta_{8}$           | $0.122$     | $0.00035$ |
+| $b_{2}$                | $0.053$                 | $0.0072$     | $\beta_{9}$           | $0.102$     | $0.00036$ |
+| $b_{3}$                | $\color{red}{0.304}$    | $0.0071$     | $\sigma_{b_{0}}$      | $0.527$     | $0.0204$  |
+| $\beta_{1}$            | $16.116$                | $0.0075$     | $\sigma_{\varepsilon}$| $0.408$     | $0.00025$ |
+| $\beta_{2}$            | $\color{red}{0.536}$    | $0.0013$     |                       |             |           |
+| $\beta_{3}$            | $0.285$                 | $0.0014$     |                       |             |           |
+| $\beta_{4}$            | $0.023$                 | $8.7e^{-05}$ |                       |             |           |
+| $\beta_{5}$            | $\color{red}{0.077}$    | $0.00031$    |                       |             |           |
+| $\beta_{6}$            | $0.008$                 | $2.2e^{-05}$ |                       |             |           |
+| $\beta_{7}$            | $\color{red}{0.039}$    | $0.00024$     |                       |             |           |
+
+## POSTERIOR ANALYSIS (2)
+
+```{r life, echo=FALSE, fig.height=5.6}
+par(mfrow = c(1, 3))
+plot(A1, type = "b", col = 'blue', ylab = bquote(beta[1]), xlab = "iterations");plot(1:length(A1), cumsum(A1)/(1:length(A1)), col = "blue", type = "b", xlab = "iterations", ylab = "mean");plot(density(A1), lwd = 2, col = "blue", main = bquote(beta[1]), xlim = c(14, 18))
+
+```
+
+## POSTERIOR ANALYSIS (3)
+
+```{r MCMC11111111111, echo=FALSE, fig.height=5.6}
+par(mfrow = c(2, 2))
+plot(A2, type = "b", col = 'darkorange', ylab = bquote(beta[2]), xlab = "iterations");plot(1:length(A2), cumsum(A2)/(1:length(A2)), col = "darkorange", type = "b", xlab = "iterations", ylab = "mean");plot(A3, type = "b", col = 'darkorchid1', ylab = bquote(beta[3]), xlab = "iterations");plot(1:length(A3), cumsum(A3)/(1:length(A3)), col = "darkorchid1", type = "b", xlab = "iterations", ylab = "mean")
+```
+
+## POSTERIOR ANALYSIS (4)
+
+```{r MCMC111qwqwfq, echo=FALSE, fig.height=5.6}
+par(mfrow = c(2, 2))
+plot(A4, type = "b", col = 'hotpink', ylab = bquote(beta[4]), xlab = "iterations");plot(1:length(A4), cumsum(A4)/(1:length(A4)), col = "hotpink", type = "b", xlab = "iterations", ylab = "mean");plot(A5, type = "b", col = 'black', ylab = bquote(beta[5]), xlab = "iterations");plot(1:length(A5), cumsum(A5)/(1:length(A5)), col = "black", type = "b", xlab = "iterations", ylab = "mean")
+```
+
+## POSTERIOR ANALYSIS (5)
+
+```{r MCMC111qwqwfqe, echo=FALSE, fig.height=5.6}
+par(mfrow = c(2, 2))
+plot(A6, type = "b", col = 'violet', ylab = bquote(beta[6]), xlab = "iterations");plot(1:length(A6), cumsum(A6)/(1:length(A6)), col = "violet", type = "b", xlab = "iterations", ylab = "mean");plot(A7, type = "b", col = 'black', ylab = bquote(beta[7]), xlab = "iterations");plot(1:length(A7), cumsum(A7)/(1:length(A7)), col = "black", type = "b", xlab = "iterations", ylab = "mean")
+```
+
+
+## POSTERIOR ANALYSIS (6)
+
+```{r Mare, echo=FALSE, fig.height=5.6}
+par(mfrow = c(2, 2))
+plot(A8, type = "b", col = 'darkred', ylab = bquote(beta[8]), xlab = "iterations");plot(1:length(A8), cumsum(A8)/(1:length(A8)), col = "darkred", type = "b", xlab = "iterations", ylab = "mean");plot(A9, type = "b", col = 'black', ylab = bquote(beta[9]), xlab = "iterations");plot(1:length(A9), cumsum(A9)/(1:length(A9)), col = "black", type = "b", xlab = "iterations", ylab = "mean")
+```
+
+
+
+## POSTERIOR ANALYSIS (7)
+
+```{r MCMC101010101, echo=FALSE, fig.height=5.6}
+par(mfrow = c(2, 2))
+plot(sigmaa, type = "b", col = 'steelblue', ylab = bquote(sigma[b0]), xlab = "iterations");plot(1:length(sigmaa), cumsum(sigmaa)/(1:length(sigmaa)), col = "steelblue", type = "b", xlab = "iterations", ylab = "mean") ; plot(sigmae, type = "b", col = 'tomato', ylab = bquote(sigma[e]), xlab = "iterations");plot(1:length(sigmae), cumsum(sigma.e)/(1:length(sigmae)), col = "tomato", type = "b", xlab = "iterations", ylab = "mean")
+```
+
+## COMPARISON
+
+We can compare the two models using the \textbf{DIC}
+
+```{r comparison, echo = FALSE, comment=NA}
+L = rbind(true.model.jags$BUGSoutput$DIC
+,true.model.jags2$BUGSoutput$DIC)
+colnames(L) = "DIC"
+row.names(L) = paste("model", sep = "", 1:2)
+print(L)
+```
+
+
+## INTERPRETATION (1)
+
+The market value of a player s.t:
+\begin{itemize}
+\item he scored $0$ goals;
+\item he assisted $0$ times;
+\item he is able to use only his left (right) foot;
+\item he has played $0$ minutes per game on average;
+\item he has an age below $30$ years old. 
+\end{itemize}
+
+```{r interpretation, echo = F, comment=NA }
+exp(mean(A1))
+```
+Indeed, the minimum minutes played per game is $9$ so the real \textit{baseline} effect is :
+```{r inter2, echo=FALSE, comment=NA}
+exp(mean(A1) + 9*mean(A6))
+```
+
+
+## INTERPRETATION (2)
+
+If we also specify the team where our player belongs to:
+
+```{r interpretation2, echo = F, comment=NA}
+R = rbind(exp(mean(A1) + mean(a1)), exp(mean(A1) + mean(a2)), exp(mean(A1) + mean(a3)))
+colnames(R) = "intercept"
+row.names(R) = paste("beta1 + b", sep = "", 1:3)
+print(R)
+```
+
+If we consider the minimum value of avm for each group:
+
+
+```{r interpretation4, echo = F, comment=NA}
+R = rbind(exp(mean(A1) + 9*mean(A6) + mean(a1)), exp(mean(A1) + 15.75*mean(A6)+ mean(a2)), exp(mean(A1) + 43.68*mean(A6) + mean(a3)))
+colnames(R) = "intercept"
+row.names(R) = c("(beta1 + b1 + 9*beta6) ", "(beta1 + b2 + 15.75*beta6)", "(beta1 + b3 + 43.68*beta6)")
+print(R)
+
+```
+
+
+
+## INTERPRETATION (3)
+```{r superchunk, echo=FALSE, fig.height=6}
+X = rbind(A2, A3, A4, A5, A6, A7, A8, A9)
+X1 = apply(X, MARGIN = 1, FUN = hdi)
+df = data.frame(coefs = paste("beta", sep = "", 2:9), value = c(C2, C3, C4, C5, C6, C7, C8, C9), lower = c(as.numeric(X1$A2[2]), as.numeric(X1$A3[2]), as.numeric(X1$A4[2]), as.numeric(X1$A5[2]), as.numeric(X1$A6[2]), as.numeric(X1$A7[2]), as.numeric(X1$A8[2]), as.numeric(X1$A9[2])), upper = c(as.numeric(X1$A2[3]), as.numeric(X1$A3[3]), as.numeric(X1$A4[3]), as.numeric(X1$A5[3]), as.numeric(X1$A6[3]), as.numeric(X1$A7[3]), as.numeric(X1$A8[3]), as.numeric(X1$A9[3])))
+ggplot(data = df, aes (y = coefs, x = value, xmin = lower, xmax = upper))+
+  geom_point() + 
+  geom_errorbarh(height=.1)+
+  geom_vline(xintercept=0, color='black', linetype='dashed', alpha=.5)+
+  labs(title='Effects for each coefficient', x ='Effect', y = bquote(beta))+
+  theme_classic()
+```
+
+
+## INTERPRETATION (4)
+We can interpret our coefficients as \textit{elasticities}
+
+```{r interpretation3, echo = F, comment=NA}
+U = rbind(exp(mean(A2)) - 1, exp(mean(A3)) - 1, exp(mean(A4)) - 1, exp(mean(A5)) - 1, exp(mean(A6)) - 1, exp(mean(A7)) - 1, exp(mean(A8)) - 1, exp(mean(A9)) - 1)
+colnames(U) = c("effect")
+row.names(U) = c("ageinclass4", "foot", "goals", "assists", "avm", "goals x pos2", "assists x pos2", "assists x pos3")
+print(U)
+```
+
+
+## REFERENCES
+
+```{=tex}
+\begin{itemize}
+\item Müller, Simons, Weinmann, (2017). \textbf{Beyond crowd judgments: Data-driven estimation of market value in association football}. European Journal of Operational Research, 263(2), 611-624;
+\item Majewski, (2016). \textbf{Identification of factors determining market value of the most valuable football players}. Central European Management Journal, 24(3), 91-104;
+\item Wicker, Prinz, Weimar, Deutscher, Upmann, (2013). \textbf{No Pain, No Gain Effort and Productivity in Professional Soccer}. International Journal of Sport Finance, 8(2);
+\item Kahn, (2000). \textbf{The sports business as a labor market laboratory}. Journal of economic perspectives, 14(3), 75-94.
+\end{itemize}
+```
